@@ -1,26 +1,27 @@
 import { Request, Response } from "express";
-import User from "../models/user";
+import User, { IUser } from "../models/user";
+import { Role } from "../utils/roles";
 
 interface CustomRequest extends Request {
-  user: { role: string; userId: string };
+  user: { role: Role; userId: string };
 }
 
 export const getUsers = async (req: Request, res: Response) => {
   try {
     const { role, userId } = (req as CustomRequest).user;
 
-    if (role === "admin") {
+    if (role === Role.Admin) {
       const users = await User.find().populate("manager");
       return res.json(users);
     }
 
-    if (role === "manager") {
+    if (role === Role.Manager) {
       const user = await User.findById(userId);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      const subordinateUsers = await User.find({ manager: userId });
+      const subordinateUsers = await getSubordinateUsers(userId);
       const responseData = { user, subordinateUsers };
       return res.json(responseData);
     }
@@ -35,6 +36,24 @@ export const getUsers = async (req: Request, res: Response) => {
     console.error("Error getting users:", error);
     res.status(500).json({ message: "Internal server error" });
   }
+};
+
+const getSubordinateUsers = async (managerId: string) => {
+  const subordinateUsers = await User.find({ manager: managerId });
+
+  const nestedSubordinateUsers: IUser[] = [];
+  let stack = subordinateUsers.slice();
+
+  while (stack.length > 0) {
+    const user = stack.pop();
+    if (user) {
+      const subordinates = await User.find({ manager: user._id });
+      nestedSubordinateUsers.push(...subordinates);
+      stack = stack.concat(subordinates);
+    }
+  }
+
+  return nestedSubordinateUsers;
 };
 
 export const updateManager = async (req: Request, res: Response) => {
@@ -54,8 +73,8 @@ export const updateManager = async (req: Request, res: Response) => {
     }
 
     if (
-      role === "admin" ||
-      (role === "manager" && requesterId === userToUpdate.manager)
+      role === Role.Admin ||
+      (role === Role.Manager && requesterId === userToUpdate.manager)
     ) {
       const updatedUser = await User.findByIdAndUpdate(
         userId,
